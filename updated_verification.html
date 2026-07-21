@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HUC0305 Flood Severity Mismatch Audit</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+        .class-NUISANCE { background-color: #fef08a; color: #713f12; } /* Soft Yellow */
+        .class-MODERATE { background-color: #fed7aa; color: #7c2d12; } /* Soft Orange */
+        .class-SEVERE { background-color: #fecaca; color: #7f1d1d; }   /* Soft Red */
+        .class-UNKNOWN, .class-ERROR { background-color: #e2e8f0; color: #1e293b; }
+        
+        /* Utility class to handle visibility filtering dynamically */
+        .row-hidden { display: none !important; }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans text-gray-900 min-h-screen p-6">
+
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-8 border-b border-gray-200 pb-5">
+            <h1 class="text-3xl font-bold tracking-tight text-gray-900">Local Storm Report Mismatch Audit</h1>
+            <p class="text-sm text-gray-500 mt-1">Project Space: HUC0305 Watershed (NC/SC) | Model: gemma4:e4b</p>
+        </header>
+
+        <div class="bg-white p-6 rounded-xl shadow-xs border border-gray-200 mb-6">
+            <h2 class="text-lg font-semibold mb-2 text-gray-800">1. Load Classified CSV</h2>
+            <p class="text-sm text-gray-600 mb-4">Select the processed CSV file containing both <code>flood_severity_class</code> and <code>picked_class</code> to audit the mismatched model outputs.</p>
+            <input type="file" id="csvFileInput" accept=".csv" 
+                   class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer" />
+        </div>
+
+        <div id="metricsPanel" class="hidden space-y-6 mb-6">
+            <div>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">AI Dataset Breakdown (Full Set)</h3>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="bg-white p-4 rounded-lg border border-gray-200 shadow-xs">
+                        <div class="text-xs font-semibold uppercase tracking-wider text-gray-500">Total Reports</div>
+                        <div id="totalCount" class="text-2xl font-bold mt-1">-</div>
+                    </div>
+                    <div class="bg-yellow-50 p-4 rounded-lg border border-yellow-200 shadow-xs">
+                        <div class="text-xs font-semibold uppercase tracking-wider text-yellow-700">Nuisance</div>
+                        <div id="nuisanceCount" class="text-2xl font-bold text-yellow-900 mt-1">-</div>
+                    </div>
+                    <div class="bg-orange-50 p-4 rounded-lg border border-orange-200 shadow-xs">
+                        <div class="text-xs font-semibold uppercase tracking-wider text-orange-700">Moderate</div>
+                        <div id="moderateCount" class="text-2xl font-bold text-orange-900 mt-1">-</div>
+                    </div>
+                    <div class="bg-red-50 p-4 rounded-lg border border-red-200 shadow-xs">
+                        <div class="text-xs font-semibold uppercase tracking-wider text-red-700">Severe</div>
+                        <div id="severeCount" class="text-2xl font-bold text-red-900 mt-1">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Automated Validation Performance</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="bg-emerald-50/50 p-4 rounded-lg border border-emerald-200 shadow-xs opacity-60">
+                        <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Correct AI Output (Matches Ground Truth)</div>
+                        <div id="correctAuditCount" class="text-3xl font-bold text-emerald-900 mt-1">0</div>
+                    </div>
+                    <div class="bg-rose-50 p-4 rounded-lg border border-rose-300 shadow-xs ring-2 ring-rose-500/20">
+                        <div class="text-xs font-semibold uppercase tracking-wider text-rose-700 font-bold">⚠️ Incorrect AI Output (Mismatches Ground Truth)</div>
+                        <div id="incorrectAuditCount" class="text-3xl font-bold text-rose-900 mt-1">0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-xs border border-gray-200 overflow-hidden">
+            <div class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-800">2. Mismatch Review Log</h2>
+                    <span id="rowCountLabel" class="text-xs font-medium text-gray-500">No data loaded</span>
+                </div>
+                
+                <div class="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-gray-300 shadow-2xs">
+                    <label for="viewFilter" class="text-xs font-semibold text-gray-600 uppercase tracking-wide">Display:</label>
+                    <select id="viewFilter" onchange="applyRowFilters()" class="text-xs font-medium text-gray-900 bg-transparent focus:outline-none cursor-pointer">
+                        <option value="incorrect-only" selected>🚨 Incorrect Classifications Only</option>
+                        <option value="all">📁 Show Entire Dataset (All Rows)</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="overflow-x-auto max-h-[600px]">
+                <table class="min-w-full divide-y divide-gray-200 text-left text-sm" id="reportTable">
+                    <thead class="bg-gray-100 text-gray-700 uppercase text-xs tracking-wider sticky top-0">
+                        <tr>
+                            <th class="px-4 py-3 font-semibold text-center">Row</th>
+                            <th class="px-6 py-3 font-semibold w-1/4">Verification Assessment</th>
+                            <th class="px-6 py-3 font-semibold w-1/6">AI Severity Class</th>
+                            <th class="px-6 py-3 font-semibold w-1/6">Human Ground Truth</th>
+                            <th class="px-6 py-3 font-semibold w-2/5">Remark Text</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200 bg-white" id="tableBody">
+                        <tr id="initialPlaceholderRow">
+                            <td colspan="5" class="px-6 py-10 text-center text-gray-400 italic">
+                                Please select and load your CSV file above to populate this validation environment.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('csvFileInput').addEventListener('change', handleFileSelect, false);
+
+        let rowAssessments = {}; 
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                processData(text);
+            };
+            reader.readAsText(file);
+        }
+
+        function processData(csvText) {
+            const lines = csvText.split(/\r\n|\n/);
+            if (lines.length === 0 || lines[0] === "") return;
+
+            const headers = parseCSVLine(lines[0]);
+            
+            const remarkIdx = headers.findIndex(h => h.toLowerCase() === 'remark');
+            const aiClassIdx = headers.findIndex(h => h.toLowerCase() === 'fld_sv_cls');
+            const humanClassIdx = headers.findIndex(h => h.toLowerCase() === 'picked_class');
+
+            if (remarkIdx === -1 || aiClassIdx === -1) {
+                alert("Error: Missing required validation columns. Ensure your CSV features both 'remark' and 'flood_severity_class' properties.");
+                return;
+            }
+
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = ''; 
+            rowAssessments = {}; 
+
+            let metrics = { total: 0, NUISANCE: 0, MODERATE: 0, SEVERE: 0 };
+            let mismatchTally = 0;
+
+            for (let i = 1; i < lines.length; i++) {
+                if (lines[i].trim() === "") continue;
+                
+                const rowCells = parseCSVLine(lines[i]);
+                const remark = rowCells[remarkIdx] || "";
+                let aiSeverity = (rowCells[aiClassIdx] || "UNKNOWN").toUpperCase().trim();
+                let humanSeverity = humanClassIdx !== -1 && rowCells[humanClassIdx] ? rowCells[humanClassIdx].toUpperCase().trim() : "";
+
+                metrics.total++;
+                if (metrics[aiSeverity] !== undefined) {
+                    metrics[aiSeverity]++;
+                }
+
+                let autoStatus = "unassigned";
+                if (humanSeverity !== "") {
+                    autoStatus = (aiSeverity === humanSeverity) ? "correct" : "incorrect";
+                }
+
+                if (autoStatus === "incorrect") {
+                    mismatchTally++;
+                }
+
+                rowAssessments[metrics.total] = { 
+                    status: autoStatus, 
+                    correctedClass: autoStatus === "incorrect" ? humanSeverity : "" 
+                };
+
+                const tr = document.createElement('tr');
+                tr.id = `data-row-${metrics.total}`;
+                // Direct custom attribute assignment to manage filtering seamlessly via JS
+                tr.setAttribute('data-status', autoStatus);
+                tr.className = "hover:bg-gray-50 transition-colors data-audit-row";
+
+                tr.innerHTML = `
+                    <td class="px-4 py-4 whitespace-nowrap text-xs font-mono text-gray-400 text-center">${metrics.total}</td>
+                    <td class="px-6 py-4 whitespace-nowrap flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+                        <select onchange="updateAuditMetrics(${metrics.total}, this.value)" 
+                                class="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full sm:w-48 p-2 font-medium cursor-pointer">
+                            <option value="unassigned" ${autoStatus === 'unassigned' ? 'selected' : ''}>-- Pending Review --</option>
+                            <option value="correct" class="text-emerald-700 font-semibold" ${autoStatus === 'correct' ? 'selected' : ''}>🟢 Correct Output</option>
+                            <option value="incorrect" class="text-rose-700 font-semibold" ${autoStatus === 'incorrect' ? 'selected' : ''}>🔴 Incorrect Output</option>
+                        </select>
+                        
+                        <select id="correction-box-${metrics.total}" onchange="updateCorrectionClass(${metrics.total}, this.value)"
+                                class="${autoStatus === 'incorrect' ? '' : 'hidden'} bg-amber-50 border border-amber-300 text-amber-900 text-xs rounded-lg focus:ring-amber-500 focus:border-amber-500 w-full sm:w-40 p-2 font-semibold cursor-pointer">
+                            <option value="" ${autoStatus !== 'incorrect' ? 'selected' : ''} disabled>Select True Class...</option>
+                            <option value="NUISANCE" ${humanSeverity === 'NUISANCE' ? 'selected' : ''}>⚠️ NUISANCE</option>
+                            <option value="MODERATE" ${humanSeverity === 'MODERATE' ? 'selected' : ''}>🍊 MODERATE</option>
+                            <option value="SEVERE" ${humanSeverity === 'SEVERE' ? 'selected' : ''}>🚨 SEVERE</option>
+                        </select>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-3 py-1 rounded-full text-xs font-bold tracking-wide uppercase class-${aiSeverity}">
+                            ${aiSeverity}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        ${humanSeverity ? `
+                        <span class="px-3 py-1 rounded-full text-xs font-bold tracking-wide uppercase class-${humanSeverity}">
+                            ${humanSeverity}
+                        </span>` : `<span class="text-gray-400 italic text-xs">Missing column</span>`}
+                    </td>
+                    <td class="px-6 py-4 text-gray-700 leading-relaxed">${escapeHtml(remark)}</td>
+                `;
+                tbody.appendChild(tr);
+            }
+
+            // Update DOM Elements
+            document.getElementById('totalCount').innerText = metrics.total;
+            document.getElementById('nuisanceCount').innerText = metrics.NUISANCE;
+            document.getElementById('moderateCount').innerText = metrics.MODERATE;
+            document.getElementById('severeCount').innerText = metrics.SEVERE;
+            
+            calculateTotals();
+            applyRowFilters(); // Apply chosen layout visibility criteria instantly
+
+            document.getElementById('metricsPanel').classList.remove('hidden');
+        }
+
+        // Handles live layout row rendering filtering
+        function applyRowFilters() {
+            const filterValue = document.getElementById('viewFilter').value;
+            const rows = document.querySelectorAll('.data-audit-row');
+            let visibleCount = 0;
+
+            rows.forEach(row => {
+                const status = row.getAttribute('data-status');
+                
+                if (filterValue === 'incorrect-only') {
+                    if (status === 'incorrect') {
+                        row.classList.remove('row-hidden');
+                        visibleCount++;
+                    } else {
+                        row.classList.add('row-hidden');
+                    }
+                } else {
+                    // Show everything
+                    row.classList.remove('row-hidden');
+                    visibleCount++;
+                }
+            });
+
+            // Adjust string readout metric labels to accurately echo filtered context
+            if (filterValue === 'incorrect-only') {
+                document.getElementById('rowCountLabel').innerText = `Displaying ${visibleCount} verified classification mismatches`;
+            } else {
+                document.getElementById('rowCountLabel').innerText = `Displaying all ${visibleCount} total mapped records`;
+            }
+
+            // Inject an empty state notification row if no mismatches are detected
+            const existingEmptyMsg = document.getElementById('emptyFilterRowMessage');
+            if (existingEmptyMsg) existingEmptyMsg.remove();
+
+            if (visibleCount === 0) {
+                const tbody = document.getElementById('tableBody');
+                const tr = document.createElement('tr');
+                tr.id = "emptyFilterRowMessage";
+                tr.innerHTML = `
+                    <td colspan="5" class="px-6 py-12 text-center text-emerald-600 font-medium bg-emerald-50/50">
+                        🎉 Perfect Alignment! No incorrect classification entries found with current structural filter selections.
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            }
+        }
+
+        function updateAuditMetrics(rowId, value) {
+            rowAssessments[rowId].status = value;
+            
+            // Sync structural attributes dynamically to make runtime user modifications interactive
+            const targetedRow = document.getElementById(`data-row-${rowId}`);
+            if (targetedRow) {
+                targetedRow.setAttribute('data-status', value);
+            }
+            
+            const correctionBox = document.getElementById(`correction-box-${rowId}`);
+            if (value === "incorrect") {
+                correctionBox.classList.remove('hidden');
+            } else {
+                correctionBox.classList.add('hidden');
+                correctionBox.value = ""; 
+                rowAssessments[rowId].correctedClass = "";
+            }
+
+            calculateTotals();
+            applyRowFilters(); // Re-trigger filtration loop engine to account for manual manual adjustment state transitions
+        }
+
+        function updateCorrectionClass(rowId, selectedClass) {
+            rowAssessments[rowId].correctedClass = selectedClass;
+        }
+
+        function calculateTotals() {
+            let correctCount = 0;
+            let incorrectCount = 0;
+
+            for (const id in rowAssessments) {
+                if (rowAssessments[id].status === "correct") correctCount++;
+                if (rowAssessments[id].status === "incorrect") incorrectCount++;
+            }
+
+            document.getElementById('correctAuditCount').innerText = correctCount;
+            document.getElementById('incorrectAuditCount').innerText = incorrectCount;
+        }
+
+        function parseCSVLine(text) {
+            let p = '', c = false, r = [];
+            for (let i = 0; i < text.length; i++) {
+                let ch = text[i], next = text[i+1];
+                if (ch === '"') { 
+                    if (c && next === '"') { p += '"'; i++; } 
+                    else { c = !c; }
+                } else if (ch === ',' && !c) { 
+                    r.push(p); p = ''; 
+                } else { p += ch; }
+            }
+            r.push(p);
+            return r;
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>

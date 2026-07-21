@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LSR Flood Type Verification Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-800 font-sans">
+
+    <div class="max-w-7xl mx-auto p-6">
+        <header class="mb-8 border-b border-gray-200 pb-5">
+            <h1 class="text-3xl font-extrabold text-gray-900 tracking-tight">LSR Flood Type Verification Tool</h1>
+            <p class="text-sm text-gray-500 mt-1">Upload your updated <strong>june15.csv</strong> file to verify, filter, and audit AI classifications.</p>
+        </header>
+
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-8 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-4">
+                <label class="block">
+                    <span class="sr-only">Choose CSV File</span>
+                    <input type="file" id="csvFileInput" accept=".csv" 
+                           class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"/>
+                </label>
+            </div>
+
+            <div id="filterContainer" class="hidden flex items-center gap-3">
+                <span class="text-sm font-medium text-gray-600">Filter Classification:</span>
+                <select id="typeFilter" class="rounded-md border-gray-300 shadow-sm p-2 bg-gray-50 border focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm">
+                    <option value="ALL">All Categories</option>
+                    <option value="FLUVIAL">FLUVIAL Only</option>
+                    <option value="INFRASTRUCTURE">INFRASTRUCTURE Only</option>
+                    <option value="INDETERMINATE">INDETERMINATE Only</option>
+                </select>
+                <span id="rowCountBadge" class="text-xs bg-gray-100 text-gray-700 px-3 py-1.5 rounded-full font-mono border border-gray-200">Rows: 0</span>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="overflow-x-auto max-h-[650px]">
+                <table class="min-w-full divide-y divide-gray-200 relative text-left">
+                    <thead class="bg-gray-100 sticky top-0 z-10 shadow-sm">
+                        <tr>
+                            <th scope="col" class="px-6 py-3.5 text-xs font-bold text-gray-500 uppercase tracking-wider w-1/12">Row Index</th>
+                            <th scope="col" class="px-6 py-3.5 text-xs font-bold text-gray-500 uppercase tracking-wider w-8/12">Remark Text</th>
+                            <th scope="col" class="px-6 py-3.5 text-xs font-bold text-gray-500 uppercase tracking-wider w-3/12">Flood Type</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody" class="bg-white divide-y divide-gray-200 text-sm">
+                        <tr>
+                            <td colspan="3" class="px-6 py-12 text-center text-gray-400 font-medium">
+                                Please select and upload your processed CSV file to populate the validation grid.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let globalCsvData = [];
+
+        document.getElementById('csvFileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // Use PapaParse to cleanly process CSV, handling inline quotes and multi-line breaks natively
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    globalCsvData = results.data;
+                    
+                    // Verify structure has the required components
+                    if (globalCsvData.length > 0 && !('REMARK' in globalCsvData[0])) {
+                        alert("❌ Error: Missing critical 'REMARK' column header in this CSV.");
+                        return;
+                    }
+
+                    // Show options bar
+                    document.getElementById('filterContainer').classList.remove('hidden');
+                    renderTable('ALL');
+                },
+                error: function(err) {
+                    alert("❌ Error processing file: " + err.message);
+                }
+            });
+        });
+
+        // Filter event listener
+        document.getElementById('typeFilter').addEventListener('change', function(e) {
+            renderTable(e.target.value);
+        });
+
+        function renderTable(filterValue) {
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = ''; // Reset UI view
+            
+            let filteredRows = 0;
+
+            globalCsvData.forEach((row, idx) => {
+                const remark = row['REMARK'] || '';
+                // Fallback to INDETERMINATE if column is empty/missing
+                const floodType = (row['flood_type'] || 'INDETERMINATE').trim().toUpperCase();
+
+                // Apply targeted filtering
+                if (filterValue !== 'ALL' && floodType !== filterValue) {
+                    return; 
+                }
+
+                filteredRows++;
+
+                // Build context styling colors for validation checks
+                let badgeStyle = 'bg-gray-100 text-gray-700 border-gray-300';
+                if (floodType === 'FLUVIAL') {
+                    badgeStyle = 'bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold';
+                } else if (floodType === 'INFRASTRUCTURE') {
+                    badgeStyle = 'bg-amber-50 text-amber-700 border-amber-200 font-semibold';
+                } else if (floodType === 'INDETERMINATE') {
+                    badgeStyle = 'bg-rose-50 text-rose-600 border-rose-200 italic';
+                }
+
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-gray-50/70 transition-colors duration-150';
+
+                tr.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap font-mono text-xs text-gray-400 font-medium">${idx + 1}</td>
+                    <td class="px-6 py-4 text-gray-700 break-words max-w-xl leading-relaxed">${escapeHtml(remark)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-3 py-1 inline-flex text-xs leading-5 rounded-full border ${badgeStyle}">
+                            ${floodType}
+                        </span>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            // Update visible badge count
+            document.getElementById('rowCountBadge').innerText = `Rows: ${filteredRows}`;
+            
+            if(filteredRows === 0) {
+                tbody.innerHTML = `<tr><td colspan="3" class="px-6 py-12 text-center text-gray-400">No rows found matching filter selection.</td></tr>`;
+            }
+        }
+
+        // Helper framework to escape text string and prevent UI broken code injection bugs
+        function escapeHtml(text) {
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>
