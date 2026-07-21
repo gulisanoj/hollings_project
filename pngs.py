@@ -2,25 +2,26 @@ import os
 import glob
 import re
 import datetime
+import time
 import numpy as np
+import pandas as pd  
 import rasterio
 from rasterio.warp import transform_bounds
 from rasterio.vrt import WarpedVRT
 import geopandas as gpd
-import fiona  
 import contextily as cx
 from PIL import Image, ImageDraw, ImageFont
 
 # =========================================================================
 # 1. PATHS & INITIAL LAYER LOAD
 # =========================================================================
-raster_dir = "/Projects/flood_threat/HUC1028"
+raster_dir = "/Projects/flood_threat/model_automation/flood_tifs"
 prediction_dir = os.path.join(raster_dir, "predictions")
-lsr_path = "/Projects/flood_threat/HUC1028/2026_ff_lsrs.shp"
-ffw_path = os.path.join(raster_dir, "ffws.shp")
-huc_shp_path = os.path.join(raster_dir, "huc1028_boundary.shp")
+lsr_path = "/Projects/flood_threat/model_automation/training_data/buffered_lsr_with_precip.shp"
+ffw_path = os.path.join(raster_dir, "flash_flood_warnings/huc0305_ffw.shp")
+huc_shp_path = "/Projects/flood_threat/HUC0305/forest_features/intermediate/huc0305_boundary.shp"
 
-frame_output_root = os.path.join(raster_dir, "individual_frames")
+frame_output_root = os.path.join(raster_dir, "final_individual_frames")
 os.makedirs(frame_output_root, exist_ok=True)
 
 def parse_valid_time(val):
@@ -30,15 +31,11 @@ def parse_valid_time(val):
     except Exception:
         return None
 
-# --- Process HUC 1028 Watershed Boundary ---
-print("Loading HUC 1028 watershed boundary...")
-if os.path.exists(huc_shp_path):
-    gdf_huc = gpd.read_file(huc_shp_path, engine="fiona")
-    if gdf_huc.crs is None: gdf_huc.crs = "EPSG:4326"  
-    gdf_huc = gdf_huc.to_crs("EPSG:3857")
-else:
-    print(f"[WARNING] Boundary file not found at {huc_shp_path}, creating empty proxy...")
-    gdf_huc = gpd.GeoDataFrame(geometry=[], crs="EPSG:3857")
+# --- Process HUC 0305 Watershed Boundary ---
+print("Loading HUC 0305 watershed boundary...")
+gdf_huc = gpd.read_file(huc_shp_path, engine="fiona")
+if gdf_huc.crs is None: gdf_huc.crs = "EPSG:4326"  
+gdf_huc = gdf_huc.to_crs("EPSG:3857")
 
 # --- Process LSR Shapefile ---
 print("Loading LSR validation shapefile...")
@@ -48,12 +45,10 @@ gdf_lsr = gdf_lsr.to_crs("EPSG:3857")
 gdf_lsr['VALID_DT'] = gdf_lsr['VALID'].apply(parse_valid_time)
 gdf_lsr = gdf_lsr.dropna(subset=['VALID_DT']).copy()
 gdf_lsr['VALID_DAY_STR'] = gdf_lsr['VALID_DT'].dt.strftime("%Y%m%d")
-
-# Note: scale only affects Polygons/LineStrings. Points will remain Points.
 gdf_lsr['geometry'] = gdf_lsr.geometry.scale(xfact=5.0, yfact=5.0, origin='centroid')
 
 # --- Process Flash Flood Warning (FFW) Shapefile ---
-print("Loading HUC 1028 Flash Flood Warning shapefile...")
+print("Loading Flash Flood Warning shapefile...")
 gdf_ffw = gpd.read_file(ffw_path, engine="fiona")
 if gdf_ffw.crs is None: gdf_ffw.crs = "EPSG:4326"  
 gdf_ffw = gdf_ffw.to_crs("EPSG:3857")
@@ -61,15 +56,19 @@ gdf_ffw['VALID_DT'] = gdf_ffw['ISSUED'].apply(parse_valid_time)
 gdf_ffw = gdf_ffw.dropna(subset=['VALID_DT']).copy()
 gdf_ffw['VALID_DAY_STR'] = gdf_ffw['VALID_DT'].dt.strftime("%Y%m%d")
 
-# Target exclusively May 19th and June 5th 
-target_run_days = {"20260519", "20260605"}
-print(f"Pipeline running filters strictly for active target dates: {target_run_days}")
+# Explicit timeline strings filter targeting system bounds
+target_timestamps = {
+    "20250513-0600", "20250614-0300", "20250822-2100", 
+    "20250823-1800", "20250816-2100", "20250805-1500", 
+    "20250702-0000", "20250714-2100"
+}
+print(f"Targeting execution windows strictly matching: {target_timestamps}")
 
 # =========================================================================
-# 2. DEFINE HUC 1028 BOUNDING BOX & FETCH BASEMAP
+# 2. DEFINE HUC 0305 BOUNDING BOX & FETCH BASEMAP
 # =========================================================================
-huc_bounds_4326 = [-95.0, 39.0, -91.5, 42.0] 
-print("Fetching Esri World Imagery basemap for HUC 1028 bounds...")
+huc_bounds_4326 = [-83.5, 32.0, -78.0, 36.5] 
+print("📡 Fetching Esri World Imagery basemap for HUC 0305 bounds...")
 xmin, ymin, xmax, ymax = transform_bounds("EPSG:4326", "EPSG:3857", *huc_bounds_4326)
 bg_img, bg_ext = cx.bounds2img(xmin, ymin, xmax, ymax, zoom=9, source=cx.providers.Esri.WorldImagery)
 bg_pil_template = Image.fromarray(bg_img).convert("RGBA")
@@ -78,7 +77,7 @@ target_size = bg_pil_template.size
 cx_xmin, cx_xmax, cx_ymin, cx_ymax = bg_ext
 
 # =========================================================================
-# 3. HELPER FUNCTION TO TRANSFORM GEOMETRY TO PIXEL COORDINATES (FIXED)
+# 3. HELPER FUNCTION TO TRANSFORM GEOMETRY TO PIXEL COORDINATES
 # =========================================================================
 def get_pixel_coords(geom, xmin, ymin, xmax, ymax, img_w, img_h):
     if geom.is_empty: return []
@@ -100,19 +99,18 @@ def get_pixel_coords(geom, xmin, ymin, xmax, ymax, img_w, img_h):
     return coords
 
 # =========================================================================
-# 4. RUN EXPORT TIMELINE WITH COMPACT CORNER LEGEND
+# 4. RUN EXPORT TIMELINE WITH SEVERITY-CLASSIFIED OVERLAYS
 # =========================================================================
 for model_name in ["Model1_Any_vs_None", "Model2_Considerable_vs_None"]:
     model_folder = os.path.join(frame_output_root, model_name)
     os.makedirs(model_folder, exist_ok=True)
     
-    # Establish dynamic model headers for drawing
     if model_name == "Model1_Any_vs_None":
-        model_title = "Model 1: Any Impact vs. None"
-        model_legend_text = "Any Threat Predicted"
+        model_title_str = "Model 1: Any Impact vs. None"
+        model_legend_str = "Any Threat Predicted"
     else:
-        model_title = "Model 2: Considerable vs. None"
-        model_legend_text = "Considerable Threat Predicted"
+        model_title_str = "Model 2: Considerable vs. None"
+        model_legend_str = "Considerable Threat Predicted"
         
     print(f"\nExporting static frames to folder: {model_folder}")
     tif_files = sorted(glob.glob(os.path.join(prediction_dir, f"*{model_name}.tif")))
@@ -124,10 +122,10 @@ for model_name in ["Model1_Any_vs_None", "Model2_Considerable_vs_None"]:
         if not ts_match: continue
             
         year, month, day, hour, minute = ts_match.groups()
-        file_day_str = f"{year}{month}{day}"
+        file_timestamp_str = f"{year}{month}{day}-{hour}{minute}"
         
-        # Enforce strict day bounds execution filter
-        if file_day_str not in target_run_days: continue
+        # Enforce strict date targeting gate filter
+        if file_timestamp_str not in target_timestamps: continue
             
         label_text = f"{year}-{month}-{day} {hour}:{minute}Z"
         current_frame_dt = datetime.datetime(int(year), int(month), int(day), int(hour), int(minute))
@@ -155,97 +153,113 @@ for model_name in ["Model1_Any_vs_None", "Model2_Considerable_vs_None"]:
             vector_overlay = Image.new("RGBA", target_size, (0, 0, 0, 0))
             vector_draw = ImageDraw.Draw(vector_overlay)
             
-            # Draw LSR validations split out by fld_sv_cls profiles (handling both Points and Polygons)
+            # Draw LSR elements split out cleanly by fld_sv_cls profiles
             for _, row in active_lsrs.iterrows():
                 geom_type = row.geometry.geom_type
                 pixel_tracks = get_pixel_coords(row.geometry, cx_xmin, cx_ymin, cx_xmax, cx_ymax, target_size[0], target_size[1])
                 
-                # Severe class verification matching logic
+                # Severity check string matching sequence
                 sev_class = str(row['fld_sv_cls']).strip().upper() if 'fld_sv_cls' in row else 'NUISANCE'
-                if sev_class in ['MODERATE', 'SEVERE']:
-                    fill_color = (255, 128, 0, 130)    # Translucent Orange
+                if sev_class in ['MODERATE', 'SEVERE', 'CONSIDERABLE']:
+                    fill_color = (255, 128, 0, 255)    # Opaque Solid Orange
                     solid_color = (255, 100, 0, 255)   # Solid Dark Orange
                 else:
-                    fill_color = (255, 235, 0, 130)    # Translucent Yellow
+                    fill_color = (255, 235, 0, 255)    # Opaque Solid Yellow
                     solid_color = (235, 160, 0, 255)   # Solid Dark Yellow
                     
                 for track in pixel_tracks:
                     if geom_type in ['Point', 'MultiPoint']:
-                        # Draw as circle point marker
-                        r = 15  # Radius of point marker
-                        vector_draw.ellipse([track[0]-r, track[1]-r, track[0]+r, track[1]+r], fill=solid_color, outline=(0, 0, 0, 255), width=2)
-                    elif geom_type in ['Polygon', 'MultiPolygon']:
-                        # Draw as polygon region
+                        r = 20  
+                        vector_draw.ellipse([track[0]-r, track[1]-r, track[0]+r, track[1]+r], fill=solid_color, outline=(0, 0, 0, 255), width=3)
+                    else:
                         if len(track) < 3: continue
                         vector_draw.polygon(track, fill=fill_color)
                         vector_draw.polygon(track, outline=solid_color, width=2)
             
-            # Draw FFW active polygons
+            # Render FFW elements
             for _, row in active_ffws.iterrows():
                 poly_pixel_tracks = get_pixel_coords(row.geometry, cx_xmin, cx_ymin, cx_xmax, cx_ymax, target_size[0], target_size[1])
                 for poly_nodes in poly_pixel_tracks:
                     if len(poly_nodes) < 3: continue
-                    vector_draw.polygon(poly_nodes, outline=(57, 255, 20, 255), width=3)
+                    vector_draw.polygon(poly_nodes, outline=(57, 255, 20, 255), width=4)
             
-            # Draw HUC basin outline
+            # Render HUC 0305 Watershed outline
             for _, row in gdf_huc.iterrows():
                 poly_pixel_tracks = get_pixel_coords(row.geometry, cx_xmin, cx_ymin, cx_xmax, cx_ymax, target_size[0], target_size[1])
                 for poly_nodes in poly_pixel_tracks:
                     if len(poly_nodes) < 3: continue
-                    vector_draw.polygon(poly_nodes, outline=(0, 100, 255, 255), width=4)
+                    vector_draw.polygon(poly_nodes, outline=(0, 100, 255, 255), width=5)
             
             frame_canvas.alpha_composite(vector_overlay)
             
-        # --- Layer 3: Draw Timestamp and New Downscaled Corner Legend ---
+        # --- Layer 3: Draw Expanded Labels, Legends, and Graphics ---
         draw = ImageDraw.Draw(frame_canvas)
+        
+        header_font_size = int(target_size[1] * 0.035)  
+        legend_font_size = int(target_size[1] * 0.024)
+        
+        # FIXED: Harmonized variable fallback configurations to securely capture name definitions
         try: 
-            font_ts = ImageFont.truetype("DejaVuSans.ttf", 48)
-            font_leg = ImageFont.truetype("DejaVuSans.ttf", 32)
+            font_title = ImageFont.truetype("DejaVuSans.ttf", header_font_size)
+            font_legend = ImageFont.truetype("DejaVuSans.ttf", legend_font_size)
         except IOError: 
-            font_ts = ImageFont.load_default()
-            font_leg = ImageFont.load_default()
+            font_title = ImageFont.load_default()
+            font_legend = ImageFont.load_default()
                 
-        # Top-left metadata timestamp and model banner (Sized taller to support 2-line structure)
-        draw.rectangle([10, 10, 780, 145], fill=(0, 0, 0, 220))
-        draw.text((25, 20), label_text, fill=(255, 255, 255), font=font_ts)
-        draw.text((25, 85), model_title, fill=(255, 200, 0, 255), font=font_leg)
+        # Dynamic width box generation for top-left metadata block to completely prevent clipping text string bounds
+        time_text = f"Time: {label_text}"
+        system_text = f"System: {model_title_str}"
         
-        # RESPONSIVE CORNER LEGEND PARAMETERS (Expands to host new multi-tiered LSR keys)
-        leg_width, leg_height = 620, 295
-        leg_xmin = target_size[0] - leg_width - 15
-        leg_ymin = target_size[1] - leg_height - 15
-        leg_xmax = target_size[0] - 15
-        leg_ymax = target_size[1] - 15
+        bbox_time = draw.textbbox((0, 0), time_text, font=font_title)
+        bbox_sys = draw.textbbox((0, 0), system_text, font=font_title)
+        max_header_w = max(bbox_time[2] - bbox_time[0], bbox_sys[2] - bbox_sys[0])
         
-        draw.rectangle([leg_xmin, leg_ymin, leg_xmax, leg_ymax], fill=(0, 0, 0, 220))
+        draw.rectangle([10, 10, 10 + max_header_w + 50, 175], fill=(0, 0, 0, 220))
+        draw.text((30, 20), time_text, fill=(255, 255, 255), font=font_title)
+        draw.text((30, 95), system_text, fill=(255, 190, 0, 255), font=font_title)
         
-        # Row height alignments within the new compact box
-        row_y_starts = [leg_ymin + 20, leg_ymin + 75, leg_ymin + 130, leg_ymin + 185, leg_ymin + 240]
-        box_w, box_h = 40, 30
-        x_box = leg_xmin + 20
-        x_text = leg_xmin + 80
+        # Sized up legend layout width panel dynamically using bbox calculation to keep text securely bounded
+        longest_legend_string = "Considerable/Severe LSR (+/-3hr)"
+        bbox_leg = draw.textbbox((0, 0), longest_legend_string, font=font_legend)
+        max_legend_w = bbox_leg[2] - bbox_leg[0]
         
-        # Row 1: Model Threat Map (Updated dynamically to print the active model name)
-        draw.rectangle([x_box, row_y_starts[0], x_box + box_w, row_y_starts[0] + box_h], fill=(255, 0, 0, 255))
-        draw.text((x_text, row_y_starts[0] - 2), model_legend_text, fill=(255, 255, 255), font=font_leg)
+        leg_box_w = 140 + max_legend_w
+        leg_box_h = int(legend_font_size * 8.2)
         
-        # Row 2: Nuisance LSRs
-        draw.rectangle([x_box, row_y_starts[1], x_box + box_w, row_y_starts[1] + box_h], fill=(255, 235, 0, 255))
-        draw.text((x_text, row_y_starts[1] - 2), "Nuisance LSR (+/-3hr)", fill=(255, 255, 255), font=font_leg)
+        box_x = 5
+        box_y = target_size[1] - leg_box_h - 5
         
-        # Row 3: Mod or Severe LSRs
-        draw.rectangle([x_box, row_y_starts[2], x_box + box_w, row_y_starts[2] + box_h], fill=(255, 128, 0, 255))
-        draw.text((x_text, row_y_starts[2] - 2), "Mod / Severe LSR (+/-3hr)", fill=(255, 255, 255), font=font_leg)
+        draw.rectangle([box_x, box_y, box_x + leg_box_w, target_size[1] - 5], fill=(0, 0, 0, 240), outline=(50, 50, 50, 255), width=3)
         
-        # Row 4: FFW Polygon Boundaries
-        draw.rectangle([x_box, row_y_starts[3], x_box + box_w, row_y_starts[3] + box_h], outline=(57, 255, 20, 255), width=4)
-        draw.text((x_text, row_y_starts[3] - 2), "Flash Flood Warning (+/-3hr)", fill=(255, 255, 255), font=font_leg)
-
-        # Row 5: HUC Basin Bounds
-        draw.rectangle([x_box, row_y_starts[4], x_box + box_w, row_y_starts[4] + box_h], outline=(0, 100, 255, 255), width=4)
-        draw.text((x_text, row_y_starts[4] - 2), "HUC 1028 Basin Boundary", fill=(255, 255, 255), font=font_leg)
+        # Item 1: Model Threat
+        y_offset = box_y + int(legend_font_size * 0.5)
+        draw.rectangle([box_x + 20, y_offset, box_x + 70, y_offset + int(legend_font_size * 0.7)], fill=(255, 0, 0, 255))
+        draw.text((box_x + 100, y_offset - 4), model_legend_str, fill=(255, 255, 255), font=font_legend)
         
-        # Save Frame Asset
+        # Item 2: HUC Boundary
+        y_offset += int(legend_font_size * 1.5)
+        draw.rectangle([box_x + 20, y_offset + int(legend_font_size * 0.3), box_x + 70, y_offset + int(legend_font_size * 0.5)], fill=(0, 100, 255, 255))
+        draw.text((box_x + 100, y_offset - 4), "HUC Watershed Boundary", fill=(255, 255, 255), font=font_legend)
+        
+        # Item 3: Nuisance LSRs
+        y_offset += int(legend_font_size * 1.5)
+        dot_center_x, dot_center_y = box_x + 45, y_offset + int(legend_font_size * 0.4)
+        rad = int(legend_font_size * 0.35)
+        draw.ellipse([dot_center_x-rad, dot_center_y-rad, dot_center_x+rad, dot_center_y+rad], fill=(255, 235, 0, 255), outline=(0, 0, 0, 255), width=2)
+        draw.text((box_x + 100, y_offset - 4), "Nuisance LSR (+/-3hr)", fill=(255, 255, 255), font=font_legend)
+        
+        # Item 4: Moderate/Severe LSRs
+        y_offset += int(legend_font_size * 1.5)
+        dot_center_x, dot_center_y = box_x + 45, y_offset + int(legend_font_size * 0.4)
+        draw.ellipse([dot_center_x-rad, dot_center_y-rad, dot_center_x+rad, dot_center_y+rad], fill=(255, 128, 0, 255), outline=(0, 0, 0, 255), width=2)
+        draw.text((box_x + 100, y_offset - 4), "Considerable/Severe LSR (+/-3hr)", fill=(255, 255, 255), font=font_legend)
+        
+        # Item 5: Flash Flood Warning
+        y_offset += int(legend_font_size * 1.5)
+        draw.rectangle([box_x + 20, y_offset, box_x + 70, y_offset + int(legend_font_size * 0.7)], outline=(57, 255, 20, 255), width=4)
+        draw.text((box_x + 100, y_offset - 4), "Flash Flood Warning (+/-3hr)", fill=(255, 255, 255), font=font_legend)
+        
+        # Save and Overwrite
         frame_counter += 1
         output_png_name = f"frame_{frame_counter:04d}_{year}{month}{day}-{hour}{minute}.png"
         output_png_path = os.path.join(model_folder, output_png_name)
@@ -253,4 +267,4 @@ for model_name in ["Model1_Any_vs_None", "Model2_Considerable_vs_None"]:
         frame_canvas.save(output_png_path, "PNG")
         print(f"-> Saved individual frame: {output_png_name}", end="\r")
 
-print("\n\nAll static image directory assets updated with a clean, low-profile corner legend layout!")
+print("\n\nAll static image directory assets updated with a clean background legend layout!")
