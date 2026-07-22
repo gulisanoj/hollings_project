@@ -11,7 +11,7 @@ These files range from the LSR classification scripts, model creation/testing/tr
 
 This repository contains the end-to-end data processing pipelines, machine learning models, local LLM classification modules, and geospatial visualization scripts developed as part of the **NOAA Ernest F. Hollings Undergraduate Scholarship Program**. 
 
-The framework automates the extraction of hydro-meteorological data, processes watershed terrain rasters, classifies text-based storm reports using local LLMs (Ollama/Gemma), trains balanced Random Forest models to predict flood threat levels, and renders spatial time-series animations overlaid with real-time NWS warnings.
+The framework automates terrain processing, classifies text-based storm reports using local LLMs (Ollama/Gemma), extracts dynamic hydro-meteorological precipitation features across multiple NOAA data streams (AORC, MRMS, HRRR, IEM), trains balanced Random Forest models to predict flood threat levels, and renders spatial time-series animations overlaid with real-time NWS warnings.
 
 ---
 
@@ -19,12 +19,9 @@ The framework automates the extraction of hydro-meteorological data, processes w
 
 ```text
                                ┌──────────────────────────────────────────────┐
-                               │           1. DATA ACQUISITION                │
-                               │  - NOAA AORC (AWS S3 Zarr Cubes)             │
-                               │  - NOAA MRMS QPE (S3 Bucket)                 │
-                               │  - NOAA HRRR Atmospheric Forecasts (AWS)     │
-                               │  - IEM ASOS Station Hourly Rainfall          │
+                               │     1. DATA ACQUISITION & TERRAIN SETUP      │
                                │  - Copernicus 30m DEM Tiles (STAC API)        │
+                               │  - Watershed Boundaries & Spatial Buffers     │
                                └──────────────────────┬───────────────────────┘
                                                       │
                                                       ▼
@@ -38,8 +35,11 @@ The framework automates the extraction of hydro-meteorological data, processes w
                                                       ▼
                                ┌──────────────────────────────────────────────┐
                                │     3. FEATURE ENGINEERING & MODELING        │
+                               │  - NOAA AORC 1km Cloud Zarr Extractions      │
+                               │  - NOAA MRMS QPE (1h, 3h, 24h, 48h)          │
+                               │  - NOAA HRRR 3h Cumulative Matrices (AWS)     │
+                               │  - IEM ASOS Rolling Rainfall Accumulations   │
                                │  - Static Terrain: HAND, TWI, Slope, Imp, TCC│
-                               │  - Dynamic Rainfall: 1h, 3h, 24h, 48h Accel. │
                                │  - Random Forest Classifiers (Model 1 & 2)   │
                                └──────────────────────┬───────────────────────┘
                                                       │
@@ -56,18 +56,12 @@ The framework automates the extraction of hydro-meteorological data, processes w
 
 ## 📂 Comprehensive Script Catalog
 
-### 🌐 1. Data Downloaders & Ingestion Pipelines
-Scripts responsible for fetching, formatting, and standardizing raw meteorological and topographical data.
+### 🌐 1. Data Acquisition & Elevation Setup
+Script responsible for querying, fetching, and processing elevation data.
 
 | Script Name | Description |
 | :--- | :--- |
-| `pcp_buffers.py` | Cloud-native extraction pipeline using `xarray` and `s3fs` to query NOAA AORC 1km Zarr datasets (`s3://noaa-nws-aorc-v1-1-1km`). Generates random spatial buffer controls, extracts 1h, 3h core rainfall, and calculates 24h/48h antecedent precipitation. |
-| `dems.py` | Queries the Microsoft Planetary Computer STAC API for 30m Copernicus DEM tiles covering target watershed boundaries, mosaics them, and reprojects to `EPSG:5070`. |
-| `download_qpe.py` | Automated downloader targeting NOAA S3 buckets for MRMS CONUS MultiSensor QPE products (1H, 3H, 24H, 48H). Runs event-based date matching derived from LSR shapefiles. |
-| `download_qpe_25.py` | Time-series downloader for raw MRMS QPE compressed GRIB2 data across continuous target seasonal windows (e.g., April 1 to September 30, 2025). |
-| `hrrr.py` | Downloads high-resolution HRRR surface forecasts via `Herbie`, reprojects curvilinear grids to `EPSG:5070` using GDAL, and calculates 3-hour cumulative precipitation matrices via `NumPy`. |
-| `iem_csv.py` | Connects to the Iowa Environmental Mesonet (IEM) ASOS station streams across 48 CONUS states. Computes 3-hour rolling rainfall totals and transforms coordinates to `EPSG:5070`. |
-| `precip_workflow_test.py` | Integrated pipeline unit test. Simulates spatial nearest-neighbor lookups, pulls RTMA/Stage IV data via Herbie, and verifies feature matrices for precipitation accuracy. |
+| `dems.py` | Queries the Microsoft Planetary Computer STAC API for 30m Copernicus DEM tiles covering target watershed boundaries, mosaics them, and reprojects the output to `EPSG:5070`. |
 
 ---
 
@@ -87,11 +81,22 @@ These scripts pipe National Weather Service Local Storm Reports (LSR) remark tex
 ---
 
 ### 🌲 3. Feature Engineering & Machine Learning Models
-Supervised machine learning models (Random Forest) trained to map hydro-meteorological drivers to impact classes.
+This core module extracts dynamic rainfall features across cloud-native NOAA repositories, merges them with static terrain metrics, and trains supervised Random Forest classifiers.
 
 * **Model 1 (Binary):** `ANY_IMPACT` vs `NO_IMPACTS`
 * **Model 2 (Binary Filtered):** `CONSIDERABLE` vs `NO_IMPACTS` (drops Nuisance)
 
+#### 🌧️ Hydro-Meteorological Feature Extraction Pipelines
+| Script Name | Description |
+| :--- | :--- |
+| `pcp_buffers.py` | Cloud-native extraction pipeline using `xarray` and `s3fs` to query NOAA AORC 1km Zarr datasets (`s3://noaa-nws-aorc-v1-1-1km`). Generates random spatial buffer controls, extracts 1h and 3h core rainfall, and calculates 24h/48h antecedent precipitation. |
+| `download_qpe.py` | Downloader targeting NOAA S3 buckets for MRMS CONUS MultiSensor QPE products (1H, 3H, 24H, 48H) using event-based date matching derived from LSR shapefiles. |
+| `download_qpe_25.py` | Time-series downloader for raw MRMS QPE compressed GRIB2 data across continuous seasonal windows (e.g., April 1 to September 30, 2025). |
+| `hrrr.py` | Downloads high-resolution HRRR surface forecasts via `Herbie`, reprojects curvilinear grids to `EPSG:5070` using GDAL, and calculates 3-hour cumulative precipitation matrices via `NumPy`. |
+| `iem_csv.py` | Connects to Iowa Environmental Mesonet (IEM) ASOS station streams across 48 CONUS states, computes 3-hour rolling rainfall totals, and transforms coordinates to `EPSG:5070`. |
+| `precip_workflow_test.py` | Integrated pipeline unit test. Simulates spatial nearest-neighbor lookups, pulls RTMA/Stage IV data via Herbie, and verifies feature matrices for precipitation accuracy. |
+
+#### 🤖 Machine Learning Model Training & Evaluation
 | Script Name | Description |
 | :--- | :--- |
 | `305_model.py` | Dedicated modeling script for HUC 0305. Features automated visualization generators for feature importances, confusion matrix heatmaps, and decision sub-tree architectures. |
