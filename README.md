@@ -1,8 +1,3 @@
-# hollings_project
-Code from my Predicting Flash Flood Impacts through Machine Learning project.
-These files range from the LSR classification scripts, model creation/testing/training/validation, stacked and inferenced maps using the models, as well as pngs and gifs of the model output.
-
-
 # 🌊 Predicting Flash Flood Impacts Through Machine Learning
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
@@ -45,7 +40,7 @@ The framework automates terrain processing, classifies text-based storm reports 
                                                       │
                                                       ▼
                                ┌──────────────────────────────────────────────┐
-                               │       4. SPATIAL INFERENCE & MAPS            │
+                               │        4. SPATIAL INFERENCE & MAPS           │
                                │  - Spatial Grid Prediction (GeoTIFF)         │
                                │  - Contextual Validation vs LSRs & FFWs      │
                                │  - Animated Time-Series GIF Compilation      │
@@ -54,93 +49,83 @@ The framework automates terrain processing, classifies text-based storm reports 
 
 ---
 
-## 📂 Comprehensive Script Catalog
+## 📂 Directory Structure
 
-### 🌐 1. Data Acquisition & Elevation Setup
-Script responsible for querying, fetching, and processing elevation data.
-
-| Script Name | Description |
-| :--- | :--- |
-| `dems.py` | Queries the Microsoft Planetary Computer STAC API for 30m Copernicus DEM tiles covering target watershed boundaries, mosaics them, and reprojects the output to `EPSG:5070`. |
-
----
-
-### 🤖 2. Local LLM Classification Scripts (Ollama & Gemma)
-These scripts pipe National Weather Service Local Storm Reports (LSR) remark text through a locally running **Gemma 4:e4b** model via Ollama to derive structured training labels.
-
-| Script Name | Description |
-| :--- | :--- |
-| `2025_lsrs_classification.py` | Runs 2025 LSR text remarks through LLM severity rules (`NUISANCE`, `MODERATE`, `SEVERE`) with progress-checkpointing to CSV output. |
-| `classification.py` | Core baseline script that evaluates LSR remark text against FEMA/NWS criteria to assign severity classes using deterministic sampling (`temperature=0.0`). |
-| `flood_type.py` | Classifies the underlying flood mechanism (`FLUVIAL` vs. `INFRASTRUCTURE` vs. `INDETERMINATE`) based on text descriptions. |
-| `flood_type_classification.py` | Advanced flood-type classifier featuring Python-level keyword rule overrides for bridges, low-water crossings, and urban infrastructure to prevent LLM hallucination. |
-| `severity_classification_script.py` | Alternative pipeline configuration for batch-processing CSV datasets through Ollama severity prompts. |
-| `shapefile_classification.py` | Extends text classification directly into spatial vector attributes, safely appending `fld_sv_cls` into shapefile DBF tables. |
-| `shapeifle.py` | Spatial shapefile LLM classifier featuring incremental 100-row saving safeguards for 2026 LSR datasets to prevent data loss during long processing runs. |
+```text
+hollings_project/
+├── classifications/           # LLM text classification & HTML auditing tools
+├── data/                      # DEM, QPE, HRRR, IEM, & buffer feature pipelines
+├── models/                    # Random Forest training & evaluation scripts
+├── visuals/                   # Spatial map prediction engines & GIF generators
+└── README.md
+```
 
 ---
 
-### 🌲 3. Feature Engineering & Machine Learning Models
-This core module extracts dynamic rainfall features across cloud-native NOAA repositories, merges them with static terrain metrics, and trains supervised Random Forest classifiers.
+## 📜 Comprehensive Script Catalog
+
+### 📁 `data/` — Data Acquisition & Feature Extraction Pipelines
+Scripts responsible for querying elevation data and extracting dynamic hydro-meteorological precipitation features across NOAA repositories.
+
+| Script / File Name | Description |
+| :--- | :--- |
+| `data/dems.py` | Queries the Microsoft Planetary Computer STAC API for 30m Copernicus DEM tiles covering target watershed boundaries, mosaics them, and reprojects the output to `EPSG:5070`. |
+| `data/download_qpe.py` | Downloader targeting NOAA S3 buckets for MRMS CONUS MultiSensor QPE products (1H, 3H, 24H, 48H) using event-based date matching derived from LSR shapefiles. |
+| `data/download_qpe_25.py` | Time-series downloader for raw MRMS QPE compressed GRIB2 data across continuous seasonal windows (e.g., April 1 to September 30, 2025). |
+| `data/hrrr.py` | Downloads high-resolution HRRR surface forecasts via `Herbie`, reprojects curvilinear grids to `EPSG:5070` using GDAL, and calculates 3-hour cumulative precipitation matrices via `NumPy`. |
+| `data/iem_csv.py` | Connects to Iowa Environmental Mesonet (IEM) ASOS station streams across 48 CONUS states, computes 3-hour rolling rainfall totals, and transforms coordinates to `EPSG:5070`. |
+| `data/pcp_buffers.py` | Cloud-native extraction pipeline using `xarray` and `s3fs` to query NOAA AORC 1km Zarr datasets (`s3://noaa-nws-aorc-v1-1-1km`). Generates random spatial buffer controls, extracts 1h and 3h core rainfall, and calculates 24h/48h antecedent precipitation. |
+| `data/precip_workflow_test.py` | Integrated pipeline unit test. Simulates spatial nearest-neighbor lookups, pulls RTMA/Stage IV data via Herbie, and verifies feature matrices for precipitation accuracy. |
+
+---
+
+### 📁 `classifications/` — Local LLM Classification & Web Verification
+Scripts that pipe National Weather Service Local Storm Reports (LSR) remark text through a locally running **Gemma 4:e4b** model via Ollama to derive structured training labels, alongside interactive web auditing dashboards.
+
+| Script / File Name | Description |
+| :--- | :--- |
+| `classifications/2025_lsrs_classification.py` | Runs 2025 LSR text remarks through LLM severity rules (`NUISANCE`, `MODERATE`, `SEVERE`) with progress-checkpointing to CSV output. |
+| `classifications/classification.py` | Core baseline script that evaluates LSR remark text against FEMA/NWS criteria to assign severity classes using deterministic sampling (`temperature=0.0`). |
+| `classifications/flood_type_classification.py` | Advanced flood-type classifier featuring Python-level keyword rule overrides for bridges, low-water crossings, and urban infrastructure to prevent LLM hallucination. |
+| `classifications/severity_classification_script.py` | Alternative pipeline configuration for batch-processing CSV datasets through Ollama severity prompts. |
+| `classifications/shapefile_classification.py` | Extends text classification directly into spatial vector attributes, safely appending `fld_sv_cls` into shapefile DBF tables. |
+| `classifications/shapeifle.py` | Spatial shapefile LLM classifier featuring incremental 100-row saving safeguards for 2026 LSR datasets to prevent data loss during long processing runs. |
+| `classifications/updated_verification.html` | Interactive Tailwind-based web dashboard for auditing severity class mismatches between AI predictions (`fld_sv_cls`) and human ground truth annotations (`picked_class`). |
+| `classifications/verifcation_type.html` | Interactive verification tool for inspecting, filtering, and auditing LLM flood type assignments (`FLUVIAL` vs `INFRASTRUCTURE`). |
+
+---
+
+### 📁 `models/` — Machine Learning Model Training & Evaluation
+This core module merges dynamic rainfall features with static terrain metrics and trains supervised Random Forest classifiers.
 
 * **Model 1 (Binary):** `ANY_IMPACT` vs `NO_IMPACTS`
 * **Model 2 (Binary Filtered):** `CONSIDERABLE` vs `NO_IMPACTS` (drops Nuisance)
 
-#### 🌧️ Hydro-Meteorological Feature Extraction Pipelines
-| Script Name | Description |
+| Script / File Name | Description |
 | :--- | :--- |
-| `pcp_buffers.py` | Cloud-native extraction pipeline using `xarray` and `s3fs` to query NOAA AORC 1km Zarr datasets (`s3://noaa-nws-aorc-v1-1-1km`). Generates random spatial buffer controls, extracts 1h and 3h core rainfall, and calculates 24h/48h antecedent precipitation. |
-| `download_qpe.py` | Downloader targeting NOAA S3 buckets for MRMS CONUS MultiSensor QPE products (1H, 3H, 24H, 48H) using event-based date matching derived from LSR shapefiles. |
-| `download_qpe_25.py` | Time-series downloader for raw MRMS QPE compressed GRIB2 data across continuous seasonal windows (e.g., April 1 to September 30, 2025). |
-| `hrrr.py` | Downloads high-resolution HRRR surface forecasts via `Herbie`, reprojects curvilinear grids to `EPSG:5070` using GDAL, and calculates 3-hour cumulative precipitation matrices via `NumPy`. |
-| `iem_csv.py` | Connects to Iowa Environmental Mesonet (IEM) ASOS station streams across 48 CONUS states, computes 3-hour rolling rainfall totals, and transforms coordinates to `EPSG:5070`. |
-| `precip_workflow_test.py` | Integrated pipeline unit test. Simulates spatial nearest-neighbor lookups, pulls RTMA/Stage IV data via Herbie, and verifies feature matrices for precipitation accuracy. |
-
-#### 🤖 Machine Learning Model Training & Evaluation
-| Script Name | Description |
-| :--- | :--- |
-| `305_model.py` | Dedicated modeling script for HUC 0305. Features automated visualization generators for feature importances, confusion matrix heatmaps, and decision sub-tree architectures. |
-| `classed_models.py` | Model trainer configured with balanced 2025 unseen evaluation benchmarks and automated joblib model payload serialization. |
-| `huc1029_model.py` | Trains Random Forests using SMOTE resampling to handle extreme target class imbalances within HUC 1029 watersheds. |
-| `model_correction.py` | Production training script that serializes compiled model instances (`.joblib`) specifically formatted for operational raster inference engines. |
-| `models.py` | Primary, generalized model pipeline. Combines historical and 2025 test datasets, extracts rainfall acceleration/land-use interactions, trains Random Forests, and evaluates holdout accuracy. |
+| `models/305_model.py` | Dedicated modeling script for HUC 0305. Features automated visualization generators for feature importances, confusion matrix heatmaps, and decision sub-tree architectures. |
+| `models/classed_models.py` | Model trainer configured with balanced 2025 unseen evaluation benchmarks and automated joblib model payload serialization. |
+| `models/huc1029_model.py` | Trains Random Forests using SMOTE resampling to handle extreme target class imbalances within HUC 1029 watersheds. |
+| `models/model_correction.py` | Production training script that serializes compiled model instances (`.joblib`) specifically formatted for operational raster inference engines. |
+| `models/models.py` | Primary, generalized model pipeline. Combines historical and 2025 test datasets, extracts rainfall acceleration/land-use interactions, trains Random Forests, and evaluates holdout accuracy. |
 
 ---
 
-### 🗺️ 4. Spatial Map & Raster Prediction Engines
-Scripts in this module ingest live QPE weather layers and static terrain layers (HAND, imperviousness, canopy cover, TWI, slope), execute spatial predictions cell-by-cell, and output georeferenced GeoTIFF maps.
+### 📁 `visuals/` — Spatial Map Prediction & Visual Validation
+Scripts that ingest live QPE weather layers and static terrain layers to execute spatial predictions cell-by-cell, alongside tools that compile aerial basemaps, prediction rasters, LSR points, and Flash Flood Warning boundaries into animated timelines.
 
-| Script Name | Description |
+| Script / File Name | Description |
 | :--- | :--- |
-| `2025_maps.py` | Operational spatial raster predictor restricted to May–July event timelines within the HUC 1028 watershed. |
-| `april_maps.py` | Time-series spatial prediction engine bound specifically to April 2025 events with 3-hour lag handling logic. |
-| `maps_2025.py` | Master continuous time-series raster predictor. Features critical on-the-fly cell-corner transform fixes for MRMS GRIB2 metadata to align with terrain data. |
-
----
-
-### 🎬 5. Visual Validation & Animation Generators
-Scripts that combine prediction rasters, aerial imagery basemaps, LSR points, and Flash Flood Warning (FFW) boundaries into animated GIF timelines.
-
-| Script Name | Description |
-| :--- | :--- |
-| `april_gifs.py` | Renders Web Mercator time-series map frames overlaid on Esri World Imagery basemaps with active +/-3-hour LSR rolling validation windows for April data. |
-| `considerable_gif.py` | Compiles chronological PNG frame assets generated by other scripts into smooth, infinitely looping validation GIFs. |
-| `considerable_pngs.py` | Generates individual high-definition PNG map frames tailored for Model 2 (Considerable Threat) with active +/-3-hour warning and storm report windows. |
-| `final_2025_gifs.py` | Advanced frame renderer supporting dynamic multi-line title banners, variable-width legend bounding boxes, and severity-coded vector dots for 2025 events. |
-| `gifs.py` | Regional context animation compiler covering HUC 1028 with active warning outlines and storm report buffers. |
-| `google_slides_gif.py` | Asset optimization utility that resizes, downsamples, and applies 64-color adaptive palettes to compile lightweight, presentation-ready GIFs for slide decks. |
-| `pngs.py` | Base generator for individual high-resolution PNG frame assets for time-series predictions with custom spatial legends and watershed boundary outlines. |
-
----
-
-### 💻 6. Web Interactive Verification Tools
-Tailwind-based interactive HTML single-page applications for human-in-the-loop validation of the local LLM outputs.
-
-| File Name | Description |
-| :--- | :--- |
-| `updated_verification.html` | Interactive dashboard for auditing severity class mismatches between AI predictions (`fld_sv_cls`) and human ground truth annotations (`picked_class`). |
-| `verifcation_type.html` | Interactive verification tool for inspecting, filtering, and auditing LLM flood type assignments (`FLUVIAL` vs `INFRASTRUCTURE`). |
-| `README.md` | Primary project documentation and repository catalog file. |
+| `visuals/2025_maps.py` | Operational spatial raster predictor restricted to May–July event timelines within the HUC 1028 watershed. |
+| `visuals/april_gifs.py` | Renders Web Mercator time-series map frames overlaid on Esri World Imagery basemaps with active +/-3-hour LSR rolling validation windows for April data. |
+| `visuals/april_maps.py` | Time-series spatial prediction engine bound specifically to April 2025 events with 3-hour lag handling logic. |
+| `visuals/considerable_gif.py` | Compiles chronological PNG frame assets generated by other scripts into smooth, infinitely looping validation GIFs. |
+| `visuals/considerable_pngs.py` | Generates individual high-definition PNG map frames tailored for Model 2 (Considerable Threat) with active +/-3-hour warning and storm report windows. |
+| `visuals/final_2025_gifs.py` | Advanced frame renderer supporting dynamic multi-line title banners, variable-width legend bounding boxes, and severity-coded vector dots for 2025 events. |
+| `visuals/gifs.py` | Regional context animation compiler covering HUC 1028 with active warning outlines and storm report buffers. |
+| `visuals/google_slides_gif.py` | Asset optimization utility that resizes, downsamples, and applies 64-color adaptive palettes to compile lightweight, presentation-ready GIFs for slide decks. |
+| `visuals/maps_2025.py` | Master continuous time-series raster predictor. Features critical on-the-fly cell-corner transform fixes for MRMS GRIB2 metadata to align with terrain data. |
+| `visuals/pngs.py` | Base generator for individual high-resolution PNG frame assets for time-series predictions with custom spatial legends and watershed boundary outlines. |
 
 ---
 
